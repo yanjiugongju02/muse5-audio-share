@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>音频分享站</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f5f7fa;color:#333;padding:20px;max-width:800px;margin:0 auto}
+h1{text-align:center;margin:20px 0;color:#1a1a2e}
+.card{background:#fff;border-radius:12px;padding:24px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+input[type=email],input[type=password],input[type=text]{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;margin-bottom:12px;font-size:15px}
+button{background:#4361ee;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:15px;cursor:pointer}
+button:hover{background:#3651d4}
+button.danger{background:#e63946}
+button.secondary{background:#6c757d}
+.hidden{display:none}
+.audio-item{border-bottom:1px solid #eee;padding:16px 0}
+.audio-item audio{width:100%;margin:8px 0}
+.meta{font-size:13px;color:#888;margin-bottom:8px}
+.share-row{display:flex;gap:8px;margin-top:8px}
+.share-row input{flex:1;margin-bottom:0;font-size:13px;padding:8px}
+.share-row button{padding:8px 16px;font-size:13px}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tabs button{flex:1}
+.tabs button.active{background:#1a1a2e}
+.error{color:#e63946;font-size:14px;margin-top:8px}
+.badge{display:inline-block;background:#ffd60a;font-size:12px;padding:2px 8px;border-radius:10px;margin-left:8px}
+#user-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;font-size:14px}
+</style>
+</head>
+<body>
+<h1>🎙️ 音频分享站</h1>
+
+<div id="auth-card" class="card">
+<h2 style="margin-bottom:16px">登录 / 注册</h2>
+<input type="email" id="email" placeholder="邮箱">
+<input type="password" id="password" placeholder="密码（至少6位）">
+<div style="display:flex;gap:8px">
+<button onclick="signIn()" style="flex:1">登录</button>
+<button onclick="signUp()" style="flex:1" class="secondary">注册</button>
+</div>
+<div id="auth-err" class="error"></div>
+</div>
+
+<div id="main" class="hidden">
+<div id="user-bar">
+<span id="user-email"></span>
+<button onclick="signOut()" class="secondary" style="padding:8px 16px;font-size:13px">退出</button>
+</div>
+
+<div class="tabs">
+<button id="tab-my" class="active" onclick="showTab('my')">我的音频</button>
+<button id="tab-upload" onclick="showTab('upload')">上传</button>
+<button id="tab-admin" class="hidden" onclick="showTab('admin')">管理后台</button>
+</div>
+
+<div id="panel-my" class="card"><div id="my-list">加载中…</div></div>
+
+<div id="panel-upload" class="card hidden">
+<h2 style="margin-bottom:16px">上传音频</h2>
+<input type="text" id="up-title" placeholder="标题">
+<input type="file" id="up-file" accept="audio/*" style="margin-bottom:12px">
+<button onclick="doUpload()">上传</button>
+<div id="upload-progress"></div>
+<div id="upload-err" class="error"></div>
+<p style="font-size:13px;color:#888;margin-top:12px">支持 mp3/m4a/wav，时长不超过 30 分钟</p>
+</div>
+
+<div id="panel-admin" class="card hidden"><div id="admin-list">加载中…</div></div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://iihirccfjkrnmbicwgik.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpaGlyY2Nmamtybm1iaWN3Z2lrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEwOTY3NzgsImV4cCI6MjEwNjY3Mjc3OH0.ahipCd9Dewr-LBgr_Z702XKPBprlHhCxQr4MYYrCM8Q";
+const BUCKET = "audio-share";
+const MAX_SEC = 1800;
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let isAdmin = false;
+
+function fmtDate(s){ return new Date(s).toLocaleString("zh-CN"); }
+function fmtDur(s){ if(!s) return ""; const m=Math.floor(s/60), ss=Math.round(s%60); return m+":"+String(ss).padStart(2,"0"); }
+
+async function signUp(){
+  const email=document.getElementById("email").value.trim();
+  const password=document.getElementById("password").value;
+  const {error} = await sb.auth.signUp({email,password});
+  if(error){ document.getElementById("auth-err").textContent=error.message; return; }
+  document.getElementById("auth-err").textContent="注册成功，请登录";
+}
+async function signIn(){
+  const email=document.getElementById("email").value.trim();
+  const password=document.getElementById("password").value;
+  const {error} = await sb.auth.signInWithPassword({email,password});
+  if(error){ document.getElementById("auth-err").textContent=error.message; return; }
+  await afterLogin();
+}
+async function signOut(){ await sb.auth.signOut(); location.reload(); }
+
+async function afterLogin(){
+  const {data:{user}} = await sb.auth.getUser();
+  if(!user) return;
+  document.getElementById("auth-card").classList.add("hidden");
+  document.getElementById("main").classList.remove("hidden");
+  document.getElementById("user-email").textContent=user.email;
+  // 首个用户自动成为管理员
+  await sb.rpc("claim_first_admin");
+  // 查是否管理员
+  const {data} = await sb.from("audio_admins").select("user_id").eq("user_id",user.id).limit(1);
+  isAdmin = data && data.length>0;
+  if(isAdmin){
+    document.getElementById("tab-admin").classList.remove("hidden");
+    const em=document.getElementById("user-email");
+    em.innerHTML=user.email+'<span class="badge">管理员</span>';
+  }
+  loadMy();
+}
+function showTab(t){
+  ["my","upload","admin"].forEach(x=>{
+    document.getElementById("panel-"+x).classList.add("hidden");
+    document.getElementById("tab-"+x).classList.remove("active");
+  });
+  document.getElementById("panel-"+t).classList.remove("hidden");
+  document.getElementById("tab-"+t).classList.add("active");
+  if(t==="my") loadMy();
+  if(t==="admin") loadAdmin();
+}
+function audioCard(f, showOwner){
+  const url = SUPABASE_URL+"/storage/v1/object/public/"+BUCKET+"/"+f.storage_path;
+  const div=document.createElement("div"); div.className="audio-item";
+  div.innerHTML='<h3></h3><div class="meta"></div><audio controls preload="none"></audio><div class="share-row"><input readonly><button>复制链接</button></div><div style="margin-top:8px"><button class="danger" style="padding:6px 14px;font-size:13px">删除</button></div>';
+  div.querySelector("h3").textContent=f.title;
+  div.querySelector(".meta").textContent=(showOwner?("上传者 "+f.owner_id.slice(0,8)+"… · "):"")+fmtDate(f.created_at)+(f.duration_sec?(" · "+fmtDur(f.duration_sec)):"");
+  div.querySelector("audio").src=url;
+  const inp=div.querySelector(".share-row input"); inp.value=url;
+  div.querySelector(".share-row button").onclick=()=>{ inp.select(); document.execCommand("copy"); navigator.clipboard&&navigator.clipboard.writeText(url); };
+  div.querySelector("button.danger").onclick=()=>delAudio(f);
+  return div;
+}
+async function loadMy(){
+  const el=document.getElementById("my-list"); el.textContent="加载中…";
+  const {data,error} = await sb.from("audio_files").select("*").order("created_at",{ascending:false});
+  if(error){ el.textContent="加载失败："+error.message; return; }
+  el.innerHTML="";
+  if(!data.length){ el.textContent="还没有上传过音频"; return; }
+  data.forEach(f=>el.appendChild(audioCard(f,false)));
+}
+async function loadAdmin(){
+  const el=document.getElementById("admin-list"); el.textContent="加载中…";
+  const {data,error} = await sb.from("audio_files").select("*").order("created_at",{ascending:false});
+  if(error){ el.textContent="加载失败："+error.message; return; }
+  el.innerHTML="<h2 style='margin-bottom:16px'>全部音频（"+data.length+"）</h2>";
+  if(!data.length){ el.innerHTML+="暂无"; return; }
+  data.forEach(f=>el.appendChild(audioCard(f,true)));
+}
+async function delAudio(f){
+  if(!confirm("确定删除《"+f.title+"》？分享链接将失效。")) return;
+  const {error:e1} = await sb.storage.from(BUCKET).remove([f.storage_path]);
+  if(e1){ alert("删除文件失败："+e1.message); return; }
+  const {error:e2} = await sb.from("audio_files").delete().eq("id",f.id);
+  if(e2){ alert("删除记录失败："+e2.message); return; }
+  loadMy(); if(isAdmin) loadAdmin();
+}
+function getDuration(file){
+  return new Promise((res,rej)=>{
+    const url=URL.createObjectURL(file);
+    const a=new Audio(); a.preload="metadata";
+    a.onloadedmetadata=()=>{ URL.revokeObjectURL(url); res(a.duration); };
+    a.onerror=()=>rej(new Error("无法读取音频时长"));
+    a.src=url;
+  });
+}
+async function doUpload(){
+  const title=document.getElementById("up-title").value.trim();
+  const file=document.getElementById("up-file").files[0];
+  const prog=document.getElementById("upload-progress"), err=document.getElementById("upload-err");
+  err.textContent=""; prog.textContent="";
+  if(!title){ err.textContent="请填写标题"; return; }
+  if(!file){ err.textContent="请选择音频文件"; return; }
+  prog.textContent="正在检测时长…";
+  let dur=0;
+  try{ dur=await getDuration(file); }catch(e){ err.textContent=e.message; prog.textContent=""; return; }
+  if(dur>MAX_SEC){ err.textContent="音频时长 "+fmtDur(dur)+"，超过 30 分钟限制"; prog.textContent=""; return; }
+  const {data:{user}} = await sb.auth.getUser();
+  const ext=(file.name.split(".").pop()||"mp3").toLowerCase();
+  const path=user.id+"/"+crypto.randomUUID()+"."+ext;
+  prog.textContent="上传中…";
+  const {error:e1} = await sb.storage.from(BUCKET).upload(path, file, {contentType:file.type||"audio/mpeg"});
+  if(e1){ err.textContent="上传失败："+e1.message; prog.textContent=""; return; }
+  const {error:e2} = await sb.from("audio_files").insert({title,storage_path:path,owner_id:user.id,duration_sec:Math.round(dur),file_size:file.size});
+  if(e2){ err.textContent="保存记录失败："+e2.message; prog.textContent=""; return; }
+  prog.textContent="上传成功！";
+  document.getElementById("up-title").value=""; document.getElementById("up-file").value="";
+  setTimeout(()=>showTab("my"), 800);
+}
+sb.auth.getSession().then(({data:{session}})=>{ if(session) afterLogin(); });
+</script>
+</body>
+</html>
